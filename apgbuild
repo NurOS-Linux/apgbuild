@@ -5,26 +5,16 @@ ARGS=ArgumentParser()
 COMMAND=ARGS.add_subparsers(dest='command')
 COMMAND.add_parser('init',help='Initialize the new package').add_argument('path',help='Path to initialize to')
 COMMAND.add_parser('config',help='Configure metadata file in package')
+COMMAND.add_parser('checksum',help='Generate checksums file')
 ARGS.add_argument('--git',action='store_true',help='Initialize the new Git repository in new package')
 ARGS=ARGS.parse_args()
 from tarfile import open as taropen
 from os import path,listdir
 from colorama import Fore
-from requests import get
 
 if not path.exists('/usr/share/apgbuild/template.apg'):
-    print(Fore.LIGHTYELLOW_EX+'Template APG is not downloaded, restoring...')
-    try:
-        template_package=get('https://github.com/NurOS-Linux/APGexample/releases/latest/download/template.apg')
-        if template_package.status_code!=200:
-            print(Fore.LIGHTRED_EX+f'Failed to download template APG: {template_package.status_code}')
-            exit(1)
-    except Exception as e:
-        print(Fore.LIGHTRED_EX+f'Failed to download template APG: {e}')
-        exit(1)
-    with open('/usr/share/apgbuild/template.apg','wb')as template_package_file:
-        template_package_file.write(template_package.content)
-        template_package_file.close()
+    print(Fore.LIGHTYELLOW_EX+'Template APG is not downloaded!')
+    exit(1)
 
 class Initialization:
     def __init__(self,path:str):
@@ -40,6 +30,8 @@ class Initialization:
         Repo.init(self.path)
         print(Fore.LIGHTGREEN_EX+'Successfully initialized Git repository in new package.')
 
+if ARGS.command=='init':Initialization(ARGS.path)
+
 class Configuring:
     def __init__(self):
         print(Fore.LIGHTCYAN_EX+'Configuring metadata....')
@@ -47,13 +39,15 @@ class Configuring:
             print(Fore.LIGHTRED_EX+'Metadata file is not found in this directory. Did you initialized a package?')
             exit(1)
         from json import load
-        self.metadata=open('metdata.json','w+t')
+        self.metadata=open('metadata.json','w+t')
         self.metadata_content=load(self.metadata)
         self.ask()
         print(Fore.LIGHTGREEN_EX+'Successfully configured metadata.')
     def ask(self):
         for key,value in self.metadata_content.items():self.metadata_content[key]=input(f'Key: {key}, Current value: {value}, New value: ')
         self.metadata.write(str(self.metadata_content))
+
+if ARGS.command=='config':Configuring()
 
 class ChecksumsGenerating:
     def __init__(self):
@@ -62,12 +56,24 @@ class ChecksumsGenerating:
             print(Fore.LIGHTRED_EX+'`data` directory is not found. Did you initialized the package?')
             exit(1)
         from hashlib import md5
+        self.md5=md5
         self.files=[]
         self.get_files()
+        with open('md5sums','x')as md5sums:
+            for file in self.files:
+                md5sums.write(f'\n{file[0]} {file[1]}')
+            md5sums.close()
+        print(Fore.LIGHTGREEN_EX+'Successfully generated md5sums file.')
     def __get_files(self,dirpath:str):
         for file in listdir(dirpath):
             file=path.join(dirpath,file)
-            
+            if path.isdir(file):self.__get_files(file)
+            else:
+                with open(file,'rb')as file_checksum:
+                    self.files.append((file,self.md5(file_checksum.read()).hexdigest()))
+                    file_checksum.close()  
     def get_files(self):
         for file in listdir('data'):
             if path.isdir(file):self.__get_files(file)
+
+if ARGS.command=='checksum':Configuring()
