@@ -2,7 +2,6 @@
 
 ![NurOS Linux](https://img.shields.io/badge/NurOS-Linux-blue)
 ![Language](https://img.shields.io/badge/language-C%2B%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
 
 APGBuild is a package build system for NurOS Linux, designed to provide efficient and reliable package management capabilities.
 
