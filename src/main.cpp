@@ -15,7 +15,7 @@
 #include <cstdlib>
 #include <map>
 #include <nlohmann/json.hpp>
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 #include <cstring>
 #include <algorithm>
 #include <sstream>
@@ -74,8 +74,13 @@ private:
             throw std::runtime_error("Failed to open file: " + filepath);
         }
 
-        MD5_CTX md5Context;
-        if (MD5_Init(&md5Context) != 1) {
+        EVP_MD_CTX* md5Context = EVP_MD_CTX_new();
+        if (!md5Context) {
+            throw std::runtime_error("Failed to create MD5 context");
+        }
+
+        if (EVP_DigestInit_ex(md5Context, EVP_md5(), nullptr) != 1) {
+            EVP_MD_CTX_free(md5Context);
             throw std::runtime_error("Failed to initialize MD5 context");
         }
         
@@ -86,23 +91,29 @@ private:
             file.read(buffer.data(), BUFFER_SIZE);
             const auto bytes_read = file.gcount();
             if (bytes_read > 0) {
-                if (MD5_Update(&md5Context, buffer.data(), static_cast<size_t>(bytes_read)) != 1) {
+                if (EVP_DigestUpdate(md5Context, buffer.data(), static_cast<size_t>(bytes_read)) != 1) {
+                    EVP_MD_CTX_free(md5Context);
                     throw std::runtime_error("Failed to update MD5 hash");
                 }
             }
         }
         
         if (file.bad()) {
+            EVP_MD_CTX_free(md5Context);
             throw std::runtime_error("Error reading file: " + filepath);
         }
         
-        unsigned char result[MD5_DIGEST_LENGTH];
-        if (MD5_Final(result, &md5Context) != 1) {
+        unsigned char result[EVP_MAX_MD_SIZE];
+        unsigned int result_len = 0;
+        if (EVP_DigestFinal_ex(md5Context, result, &result_len) != 1) {
+            EVP_MD_CTX_free(md5Context);
             throw std::runtime_error("Failed to finalize MD5 hash");
         }
 
+        EVP_MD_CTX_free(md5Context);
+
         std::ostringstream ss;
-        for (size_t i = 0; i < MD5_DIGEST_LENGTH; ++i) {
+        for (unsigned int i = 0; i < result_len; ++i) {
             ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned int>(result[i]);
         }
         return ss.str();
@@ -167,73 +178,140 @@ private:
     }
     
     void createArchive(const std::string& archive_path, const std::string& source_dir) const {
-        struct archive *a;
-        struct archive_entry *entry;
+        struct archive *a = nullptr;
+        struct archive_entry *entry = nullptr;
         struct stat st;
-        char buff[8192];
-        int len;
-        FILE *fd;
+        constexpr size_t BUFFER_SIZE = 64 * 1024;
+        std::vector<char> buffer(BUFFER_SIZE);
+        FILE *fd = nullptr;
+        size_t files_added = 0;
 
-        a = archive_write_new();
-        if (!a) {
-            throw std::runtime_error("Failed to create archive object");
-        }
-
-        // Set archive format and compression
-        if (archive_write_add_filter_xz(a) != ARCHIVE_OK) {
-            archive_write_free(a);
-            throw std::runtime_error("Failed to set XZ compression");
-        }
-        
-        if (archive_write_set_format_ustar(a) != ARCHIVE_OK) {
-            archive_write_free(a);
-            throw std::runtime_error("Failed to set TAR format");
-        }
-
-        if (archive_write_open_filename(a, archive_path.c_str()) != ARCHIVE_OK) {
-            archive_write_free(a);
-            throw std::runtime_error("Failed to open archive file: " + archive_path);
-        }
-
-        // Add files recursively
-        std::error_code ec;
-        for (const auto& dir_entry : fs::recursive_directory_iterator(source_dir, ec)) {
-            if (ec) {
-                archive_write_free(a);
-                throw std::runtime_error("Error iterating directory: " + ec.message());
+        try {
+            a = archive_write_new();
+            if (!a) {
+                throw std::runtime_error("Failed to create archive object");
             }
 
-            const std::string full_path = dir_entry.path().string();
-            const std::string relative_path = fs::relative(dir_entry.path(), source_dir).string();
-
-            if (stat(full_path.c_str(), &st) != 0) {
-                continue; // Skip files we can't stat
+            if (archive_write_add_filter_xz(a) != ARCHIVE_OK) {
+                throw std::runtime_error("Failed to set XZ compression: " + std::string(archive_error_string(a)));
+            }
+            
+            if (archive_write_set_format_ustar(a) != ARCHIVE_OK) {
+                throw std::runtime_error("Failed to set TAR format: " + std::string(archive_error_string(a)));
             }
 
-            entry = archive_entry_new();
-            archive_entry_set_pathname(entry, relative_path.c_str());
-            archive_entry_copy_stat(entry, &st);
-
-            if (archive_write_header(a, entry) != ARCHIVE_OK) {
-                archive_entry_free(entry);
-                continue;
+            if (archive_write_open_filename(a, archive_path.c_str()) != ARCHIVE_OK) {
+                throw std::runtime_error("Failed to open archive file '" + archive_path + "': " + std::string(archive_error_string(a)));
             }
 
-            if (S_ISREG(st.st_mode)) {
-                fd = fopen(full_path.c_str(), "rb");
-                if (fd) {
-                    while ((len = fread(buff, 1, sizeof(buff), fd)) > 0) {
-                        archive_write_data(a, buff, len);
-                    }
-                    fclose(fd);
+            std::error_code ec;
+            for (const auto& dir_entry : fs::recursive_directory_iterator(source_dir, ec)) {
+                if (ec) {
+                    throw std::runtime_error("Error iterating directory '" + source_dir + "': " + ec.message());
                 }
+
+                const std::string full_path = dir_entry.path().string();
+                const std::string relative_path = fs::relative(dir_entry.path(), source_dir).string();
+
+                if (stat(full_path.c_str(), &st) != 0) {
+                    std::cerr << Color::RED << "Warning: Cannot stat file, skipping: " << full_path << Color::RESET << std::endl;
+                    continue;
+                }
+
+                entry = archive_entry_new();
+                if (!entry) {
+                    throw std::runtime_error("Failed to create archive entry");
+                }
+
+                archive_entry_set_pathname(entry, relative_path.c_str());
+                archive_entry_copy_stat(entry, &st);
+
+                if (archive_write_header(a, entry) != ARCHIVE_OK) {
+                    std::cerr << Color::RED << "Warning: Failed to write header for: " << relative_path 
+                             << " - " << archive_error_string(a) << Color::RESET << std::endl;
+                    archive_entry_free(entry);
+                    entry = nullptr;
+                    continue;
+                }
+
+                if (S_ISREG(st.st_mode)) {
+                    fd = fopen(full_path.c_str(), "rb");
+                    if (!fd) {
+                        std::cerr << Color::RED << "Warning: Cannot open file, skipping: " << full_path << Color::RESET << std::endl;
+                        archive_entry_free(entry);
+                        entry = nullptr;
+                        continue;
+                    }
+
+                    size_t bytes_read;
+                    while ((bytes_read = fread(buffer.data(), 1, BUFFER_SIZE, fd)) > 0) {
+                        if (archive_write_data(a, buffer.data(), bytes_read) < 0) {
+                            fclose(fd);
+                            fd = nullptr;
+                            archive_entry_free(entry);
+                            entry = nullptr;
+                            throw std::runtime_error("Failed to write data for '" + relative_path + "': " + std::string(archive_error_string(a)));
+                        }
+                    }
+
+                    if (ferror(fd)) {
+                        fclose(fd);
+                        fd = nullptr;
+                        archive_entry_free(entry);
+                        entry = nullptr;
+                        throw std::runtime_error("Error reading file: " + full_path);
+                    }
+
+                    fclose(fd);
+                    fd = nullptr;
+                }
+
+                archive_entry_free(entry);
+                entry = nullptr;
+                ++files_added;
             }
 
-            archive_entry_free(entry);
+            if (archive_write_close(a) != ARCHIVE_OK) {
+                throw std::runtime_error("Failed to close archive: " + std::string(archive_error_string(a)));
+            }
+
+            std::cout << Color::GREEN << "✓ Archive created with " << files_added << " files" << Color::RESET << std::endl;
+
+        } catch (...) {
+            if (fd) fclose(fd);
+            if (entry) archive_entry_free(entry);
+            if (a) {
+                archive_write_close(a);
+                archive_write_free(a);
+            }
+            throw;
         }
 
-        archive_write_close(a);
-        archive_write_free(a);
+        if (a) archive_write_free(a);
+    }
+
+    bool isPathSafe(const std::string& path, const std::string& extract_dir) const {
+        if (path.empty()) return false;
+        
+        if (path.find("..") != std::string::npos) return false;
+        
+        if (path[0] == '/' || path[0] == '\\') return false;
+        
+        if (path.find('\0') != std::string::npos) return false;
+        
+        try {
+            const fs::path full_path = fs::canonical(fs::path(extract_dir) / path);
+            const fs::path base_path = fs::canonical(extract_dir);
+            
+            const std::string full_str = full_path.string();
+            const std::string base_str = base_path.string();
+            
+            return full_str.substr(0, base_str.length()) == base_str &&
+                   (full_str.length() == base_str.length() || 
+                    full_str[base_str.length()] == fs::path::preferred_separator);
+        } catch (const fs::filesystem_error&) {
+            return false;
+        }
     }
 
     void extractArchive(const std::string& archive_path) const {
@@ -241,6 +319,15 @@ private:
         struct archive *ext;
         struct archive_entry *entry;
         int r;
+        
+        constexpr size_t MAX_ARCHIVE_SIZE = 1024 * 1024 * 1024;
+        constexpr size_t MAX_FILES = 10000;
+        constexpr size_t MAX_FILE_SIZE = 100 * 1024 * 1024;
+        
+        size_t total_size = 0;
+        size_t file_count = 0;
+        
+        const std::string extract_dir = fs::current_path().string();
 
         a = archive_read_new();
         ext = archive_write_disk_new();
@@ -253,7 +340,7 @@ private:
 
         archive_read_support_format_all(a);
         archive_read_support_filter_all(a);
-        archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
+        archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS | ARCHIVE_EXTRACT_SECURE_NODOTDOT);
 
         if ((r = archive_read_open_filename(a, archive_path.c_str(), 10240))) {
             archive_read_free(a);
@@ -272,8 +359,39 @@ private:
                 throw std::runtime_error("Archive read error: " + std::string(archive_error_string(a)));
             }
 
+            const char* pathname = archive_entry_pathname(entry);
+            if (!pathname) {
+                std::cerr << Color::RED << "Warning: Entry with null pathname skipped" << Color::RESET << std::endl;
+                continue;
+            }
+
+            if (!isPathSafe(pathname, extract_dir)) {
+                std::cerr << Color::RED << "Warning: Unsafe path detected and skipped: " << pathname << Color::RESET << std::endl;
+                continue;
+            }
+
+            const la_int64_t file_size = archive_entry_size(entry);
+            if (file_size > static_cast<la_int64_t>(MAX_FILE_SIZE)) {
+                std::cerr << Color::RED << "Warning: File too large, skipped: " << pathname << Color::RESET << std::endl;
+                continue;
+            }
+
+            total_size += static_cast<size_t>(file_size);
+            if (total_size > MAX_ARCHIVE_SIZE) {
+                archive_read_free(a);
+                archive_write_free(ext);
+                throw std::runtime_error("Archive too large (>1GB limit)");
+            }
+
+            if (++file_count > MAX_FILES) {
+                archive_read_free(a);
+                archive_write_free(ext);
+                throw std::runtime_error("Too many files in archive (>10000 limit)");
+            }
+
             r = archive_write_header(ext, entry);
             if (r != ARCHIVE_OK) {
+                std::cerr << Color::RED << "Warning: Failed to write header for: " << pathname << Color::RESET << std::endl;
                 continue;
             }
 
@@ -288,13 +406,20 @@ private:
                         break;
                     }
                     if (r != ARCHIVE_OK) {
+                        std::cerr << Color::RED << "Warning: Data read error for: " << pathname << Color::RESET << std::endl;
                         break;
                     }
-                    archive_write_data_block(ext, buff, size, offset);
+                    
+                    if (archive_write_data_block(ext, buff, size, offset) != ARCHIVE_OK) {
+                        std::cerr << Color::RED << "Warning: Data write error for: " << pathname << Color::RESET << std::endl;
+                        break;
+                    }
                 }
             }
 
-            archive_write_finish_entry(ext);
+            if (archive_write_finish_entry(ext) != ARCHIVE_OK) {
+                std::cerr << Color::RED << "Warning: Failed to finish entry for: " << pathname << Color::RESET << std::endl;
+            }
         }
 
         archive_read_close(a);
