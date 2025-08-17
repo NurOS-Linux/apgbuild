@@ -676,6 +676,7 @@ public:
 };
 
 int main(int argc, char* argv[]) {
+    std::cout << "Пер ты играеш стендоф :steamhappy:" << std::endl;
     if (argc > 1 && std::string(argv[1]) == "--help") {
         const ApgBuilder builder;
         builder.showHelp();
