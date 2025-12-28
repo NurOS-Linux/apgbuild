@@ -1,20 +1,29 @@
-project('apgbuild', 'cpp',
-  version : '0.2.1',
-  default_options : [
-    'warning_level=3',
-    'werror=false',
-    'cpp_std=c++23',
-    'optimization=2',
-    'b_lto=true'
-  ])
+# apgbuild - AnmiTali Package Builder
+# Author: AnmiTaliDev <anmitali198@gmail.com>
+# Copyright (c) 2026 NurOS
+# License: GPL 3.0
 
+project('apgbuild',
+  version: '2.0.0',
+  license: 'GPL-3.0',
+  meson_version: '>= 0.60.0'
+)
 
-openssl_dep = dependency('openssl')
-nlohmann_json_dep = dependency('nlohmann_json')
-libarchive_dep = dependency('libarchive')
+go = find_program('go', required: true)
+source_root = meson.project_source_root()
+build_root = meson.project_build_root()
 
-sources = ['src/Main.cpp', 'src/ApgBuilder.cpp']
-
-apgbuild_exe = executable('apgbuild', sources,
-  dependencies : [openssl_dep, nlohmann_json_dep, libarchive_dep],
-  install : true)
+# Build apgbuild binary
+apgbuild = custom_target('apgbuild',
+  output: 'apgbuild',
+  command: [
+    go, 'build',
+    '-C', source_root,
+    '-ldflags', '-s -w',
+    '-o', build_root / 'apgbuild',
+    './cmd/apgbuild'
+  ],
+  build_by_default: true,
+  install: true,
+  install_dir: get_option('bindir')
+)

@@ -1,69 +1,90 @@
 # APGBuild
 
-![NurOS Linux](https://img.shields.io/badge/NurOS-Linux-blue)
-![Language](https://img.shields.io/badge/language-C%2B%2B-blue)
+Package build system for NurOS Linux.
 
-APGBuild is a package build system for NurOS Linux, designed to provide efficient and reliable package management capabilities.
+## About
 
-## 🚀 Features
+APGBuild is a tool for creating and managing APGv2 packages. It provides CRC32 checksums for file integrity verification and secure archive handling.
 
-- Fast and efficient package building
-- Written primarily in C++ for optimal performance
-- Shell script integration for system tasks
-- Compatible with NurOS Linux ecosystem
+## Features
 
-## 📋 Prerequisites
+- APGv2 package creation and extraction
+- CRC32 checksums (replaces deprecated MD5)
+- Interactive metadata.json wizard
+- Path traversal protection
+- tar.xz compression
 
-- C++ compiler (GCC/Clang)
-- Basic development tools
-- NurOS Linux environment
+## Requirements
 
-## 🛠 Building from Source
+- Go 1.21 or later
+- Meson (for building)
+- Ninja
+
+## Building
+
+### Using Meson
 
 ```bash
-# Clone the repository
-git clone https://github.com/NurOS-Linux/apgbuild.git
-
-# Navigate to the project directory
-cd apgbuild
-
-# Build
-chmod +x build.sh
-./build.sh
-
-# Install
-sudo cp apgbuild /usr/local/bin
+meson setup build
+meson compile -C build
+sudo meson install -C build
 ```
 
+### Using Go
 
-## 🤝 Contributing
+```bash
+go build -o apgbuild ./cmd/apgbuild
+```
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Usage
 
-## 📝 License
+```
+apgbuild [command] [options]
 
-This project is licensed under the GNU GPL 3.0 License - see the [LICENSE](LICENSE) file for details.
+Commands:
+  build, -b <dir> [-o <output>]  Build package from directory
+  extract, -x <pkg> [dest]       Extract package
+  list, -l <pkg>                 List package contents
+  meta, -m [output]              Create metadata.json
+  sums <dir> [output]            Generate CRC32 checksums
+  verify <sums> [basedir]        Verify checksums
+  version, -v                    Show version
+  help, -h                       Show help
+```
 
-## ✨ Contributors
+### Examples
 
-- [AnmiTaliDev](https://github.com/AnmiTaliDev)
+```bash
+# Build package
+apgbuild build ./mypackage -o mypackage.apg
 
-## 📞 Support & Contact
+# Extract package
+apgbuild extract package.apg ./output
 
-If you have any questions or run into issues, please:
+# Create metadata
+apgbuild meta
 
-1. Check existing GitHub Issues
-2. Create a new issue if necessary
+# Generate checksums
+apgbuild sums ./data crc32sums
+```
 
-## 🌟 Acknowledgments
+## Package Structure
 
-- NurOS Linux Team
-- All contributors who help make this project better
+```
+package.apg
+├── metadata.json
+├── crc32sums
+├── data/
+├── scripts/
+│   ├── pre-install
+│   └── post-install
+└── home/
+```
 
----
+## License
 
-Made with ❤️ for NurOS Linux
+GPL-3.0
+
+## Author
+
+AnmiTaliDev <anmitali198@gmail.com>
