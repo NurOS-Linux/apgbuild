@@ -57,13 +57,13 @@ func (b *Builder) CreatePackage(sourceDir, outputPath string) error {
 		}
 	}
 
-	// Generate CRC32 checksums for data directory
+	// Generate SHA-256 checksums for data directory
 	dataDir := filepath.Join(sourceDir, "data")
 	if info, err := os.Stat(dataDir); err == nil && info.IsDir() {
-		sumsPath := filepath.Join(sourceDir, "crc32sums")
-		fmt.Printf("%sGenerating CRC32 checksums for data directory...%s\n", ColorCyan, ColorReset)
+		sumsPath := filepath.Join(sourceDir, "sha256sums")
+		fmt.Printf("%sGenerating SHA-256 checksums for data directory...%s\n", ColorCyan, ColorReset)
 
-		entries, err := checksum.CreateCRC32Sums(dataDir, sumsPath)
+		entries, err := checksum.CreateSums(dataDir, sumsPath)
 		if err != nil {
 			return fmt.Errorf("failed to create checksums: %w", err)
 		}
@@ -77,10 +77,10 @@ func (b *Builder) CreatePackage(sourceDir, outputPath string) error {
 	// Generate checksums for home directory if exists
 	homeDir := filepath.Join(sourceDir, "home")
 	if info, err := os.Stat(homeDir); err == nil && info.IsDir() {
-		sumsPath := filepath.Join(sourceDir, "crc32sums.home")
-		fmt.Printf("%sGenerating CRC32 checksums for home directory...%s\n", ColorCyan, ColorReset)
+		sumsPath := filepath.Join(sourceDir, "sha256sums.home")
+		fmt.Printf("%sGenerating SHA-256 checksums for home directory...%s\n", ColorCyan, ColorReset)
 
-		entries, err := checksum.CreateCRC32Sums(homeDir, sumsPath)
+		entries, err := checksum.CreateSums(homeDir, sumsPath)
 		if err != nil {
 			fmt.Printf("%sWarning: failed to create home checksums: %v%s\n", ColorYellow, err, ColorReset)
 		} else {
@@ -160,9 +160,9 @@ func (b *Builder) CreateMetadata(outputPath string) error {
 	return nil
 }
 
-// GenerateChecksums generates CRC32 checksums for a directory.
+// GenerateChecksums generates SHA-256 checksums for a directory.
 func (b *Builder) GenerateChecksums(directory, outputPath string) error {
-	fmt.Printf("%sGenerating CRC32 checksums for: %s%s\n", ColorCyan, directory, ColorReset)
+	fmt.Printf("%sGenerating SHA-256 checksums for: %s%s\n", ColorCyan, directory, ColorReset)
 
 	info, err := os.Stat(directory)
 	if err != nil {
@@ -172,13 +172,13 @@ func (b *Builder) GenerateChecksums(directory, outputPath string) error {
 		return fmt.Errorf("path is not a directory: %s", directory)
 	}
 
-	entries, err := checksum.CreateCRC32Sums(directory, outputPath)
+	entries, err := checksum.CreateSums(directory, outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to generate checksums: %w", err)
 	}
 
 	for _, entry := range entries {
-		fmt.Printf("%s  %08x  %s%s\n", ColorGreen, entry.Checksum, entry.Path, ColorReset)
+		fmt.Printf("%s  %s  %s%s\n", ColorGreen, entry.Checksum, entry.Path, ColorReset)
 	}
 
 	fmt.Printf("%s Generated %d checksums to %s%s\n", ColorGreen, len(entries), outputPath, ColorReset)
@@ -189,7 +189,7 @@ func (b *Builder) GenerateChecksums(directory, outputPath string) error {
 func (b *Builder) VerifyChecksums(sumsFile, baseDir string) error {
 	fmt.Printf("%sVerifying checksums from: %s%s\n", ColorCyan, sumsFile, ColorReset)
 
-	passed, failed, err := checksum.VerifyCRC32Sums(sumsFile, baseDir)
+	passed, failed, err := checksum.VerifySums(sumsFile, baseDir)
 	if err != nil {
 		return fmt.Errorf("verification failed: %w", err)
 	}

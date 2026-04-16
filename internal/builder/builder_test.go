@@ -63,10 +63,10 @@ func TestCreatePackage(t *testing.T) {
 		t.Error("Package was not created")
 	}
 
-	// Verify crc32sums was created
-	sumsPath := filepath.Join(sourceDir, "crc32sums")
+	// Verify sha256sums was created
+	sumsPath := filepath.Join(sourceDir, "sha256sums")
 	if _, err := os.Stat(sumsPath); os.IsNotExist(err) {
-		t.Error("crc32sums was not created")
+		t.Error("sha256sums was not created")
 	}
 }
 
@@ -137,14 +137,14 @@ func TestGenerateChecksums(t *testing.T) {
 	}
 
 	// Generate checksums
-	outputPath := filepath.Join(t.TempDir(), "crc32sums")
+	outputPath := filepath.Join(t.TempDir(), "sha256sums")
 	if err := b.GenerateChecksums(tmpDir, outputPath); err != nil {
 		t.Fatalf("GenerateChecksums failed: %v", err)
 	}
 
 	// Verify output exists
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		t.Error("crc32sums was not created")
+		t.Error("sha256sums was not created")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestVerifyChecksums(t *testing.T) {
 	}
 
 	// Generate checksums
-	sumsPath := filepath.Join(tmpDir, "crc32sums")
+	sumsPath := filepath.Join(tmpDir, "sha256sums")
 	if err := b.GenerateChecksums(tmpDir, sumsPath); err != nil {
 		t.Fatalf("GenerateChecksums failed: %v", err)
 	}

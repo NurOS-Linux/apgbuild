@@ -1,4 +1,5 @@
 // Package metadata handles APG package metadata (metadata.json).
+// Supports automatic dependency detection via ELF analysis.
 // NurOS 2026 - GPL 3.0
 package metadata
 
@@ -9,6 +10,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/NurOS-Linux/apgbuild/internal/elfanalyzer"
 )
 
 // Metadata represents the APGv2 package metadata structure.
@@ -65,6 +68,29 @@ func (m *Metadata) Save(path string) error {
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write metadata file: %w", err)
+	}
+
+	return nil
+}
+
+// DetectDependenciesFromDir analyzes a directory for ELF binaries and
+// automatically populates the Dependencies field.
+func (m *Metadata) DetectDependenciesFromDir(rootDir string) error {
+	deps, err := elfanalyzer.AnalyzeAndGenerateDeps(rootDir)
+	if err != nil {
+		return fmt.Errorf("analyze dependencies: %w", err)
+	}
+
+	// Merge with existing dependencies (avoid duplicates)
+	existing := make(map[string]bool)
+	for _, dep := range m.Dependencies {
+		existing[dep] = true
+	}
+
+	for _, dep := range deps {
+		if !existing[dep] {
+			m.Dependencies = append(m.Dependencies, dep)
+		}
 	}
 
 	return nil
