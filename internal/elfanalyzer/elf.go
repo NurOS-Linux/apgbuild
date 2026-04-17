@@ -107,9 +107,12 @@ var LibToPackageMap = map[string]string{
 	"libssl.so.3":    "openssl",
 	"libcrypto.so.3": "openssl",
 
-	// C++ runtime (repodata: gcc)
-	"libstdc++.so.6": "gcc",
-	"libgcc_s.so.1":  "gcc",
+	// C++ runtime — split from gcc package
+	// libgcc = runtime support library (libgcc_s.so.1)
+	// libstdc++ = C++ standard library runtime (libstdc++.so.6)
+	// Neither requires the gcc compiler or headers at runtime.
+	"libstdc++.so.6": "libstdc++",
+	"libgcc_s.so.1":  "libgcc",
 
 	// networking (repodata: curl, nghttp2, libidn2)
 	"libcurl.so.4":      "libcurl",
