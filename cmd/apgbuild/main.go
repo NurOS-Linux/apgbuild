@@ -53,10 +53,12 @@ Commands:
   sums <dir> <output>`)
 }
 
-// cmdBuild: apgbuild build <dir> -o <out.apg>
+// cmdBuild: apgbuild build <dir> -o <out.apg> [--compression zstd] [--level 19]
 func cmdBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	output := fs.String("o", "", "Output .apg file path (required)")
+	compression := fs.String("compression", "zstd", "Compression type: zstd|xz|bz2|gz|lz4|lzma")
+	level := fs.Int("level", 0, "Compression level (0 = algorithm default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,7 +69,7 @@ func cmdBuild(args []string) error {
 		return fmt.Errorf("-o output path is required")
 	}
 	b := builder.New()
-	return b.CreatePackage(fs.Arg(0), *output)
+	return b.CreatePackageWithCompression(fs.Arg(0), *output, *compression, *level)
 }
 
 // cmdSums: apgbuild sums <dir> <output>

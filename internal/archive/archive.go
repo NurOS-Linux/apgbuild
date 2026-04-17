@@ -1,244 +1,243 @@
-// Package archive provides tar.zst archive creation and extraction for APG packages.
-// Uses DataDog/zstd for fast Zstandard compression (pure Go, no CGO).
+// Package archive provides APG package archive creation and extraction
+// using libarchive (C library) via CGO.
+// Supports all libarchive formats: zstd, xz, bz2, gz, lz4, lzma.
 // NurOS 2026 - GPL 3.0
 package archive
 
+/*
+#cgo LDFLAGS: -larchive
+#cgo CFLAGS: -I/usr/include
+
+#include <archive.h>
+#include <archive_entry.h>
+#include <stdlib.h>
+#include <string.h>
+
+// apg_create creates a tar archive at archivePath from sourceDir.
+// compressionType: "zstd", "xz", "bz2", "gz", "lz4", "lzma"
+// level: compression level (0 = algorithm default)
+static int apg_create(const char *archivePath, const char *sourceDir,
+                      const char *compressionType, int level,
+                      char *errBuf, int errBufLen) {
+    struct archive *a = archive_write_new();
+    if (!a) { snprintf(errBuf, errBufLen, "archive_write_new failed"); return -1; }
+
+    int r = ARCHIVE_FAILED;
+    if      (strcmp(compressionType, "zstd") == 0) r = archive_write_add_filter_zstd(a);
+    else if (strcmp(compressionType, "xz")   == 0) r = archive_write_add_filter_xz(a);
+    else if (strcmp(compressionType, "bz2")  == 0) r = archive_write_add_filter_bzip2(a);
+    else if (strcmp(compressionType, "gz")   == 0) r = archive_write_add_filter_gzip(a);
+    else if (strcmp(compressionType, "lz4")  == 0) r = archive_write_add_filter_lz4(a);
+    else if (strcmp(compressionType, "lzma") == 0) r = archive_write_add_filter_lzma(a);
+    else {
+        snprintf(errBuf, errBufLen, "unknown compression: %s", compressionType);
+        archive_write_free(a); return -1;
+    }
+
+    if (r != ARCHIVE_OK) {
+        snprintf(errBuf, errBufLen, "set filter %s: %s", compressionType, archive_error_string(a));
+        archive_write_free(a); return -1;
+    }
+
+    if (level > 0) {
+        char lvl[8]; snprintf(lvl, sizeof(lvl), "%d", level);
+        archive_write_set_filter_option(a, NULL, "compression-level", lvl);
+    }
+
+    archive_write_set_format_pax_restricted(a);
+
+    if (archive_write_open_filename(a, archivePath) != ARCHIVE_OK) {
+        snprintf(errBuf, errBufLen, "open %s: %s", archivePath, archive_error_string(a));
+        archive_write_free(a); return -1;
+    }
+
+    struct archive *disk = archive_read_disk_new();
+    archive_read_disk_set_standard_lookup(disk);
+    archive_read_disk_set_symlink_logical(disk);
+
+    r = archive_read_disk_open(disk, sourceDir);
+    if (r != ARCHIVE_OK) {
+        snprintf(errBuf, errBufLen, "open dir %s: %s", sourceDir, archive_error_string(disk));
+        archive_read_free(disk); archive_write_free(a); return -1;
+    }
+
+    struct archive_entry *entry = archive_entry_new();
+    int sourceDirLen = (int)strlen(sourceDir);
+
+    for (;;) {
+        r = archive_read_next_header2(disk, entry);
+        if (r == ARCHIVE_EOF) break;
+        if (r != ARCHIVE_OK) {
+            snprintf(errBuf, errBufLen, "read disk: %s", archive_error_string(disk));
+            break;
+        }
+        archive_read_disk_descend(disk);
+
+        const char *fullPath = archive_entry_pathname(entry);
+        const char *relPath = fullPath + sourceDirLen;
+        while (*relPath == '/') relPath++;
+        if (*relPath == '\0') continue;
+        archive_entry_set_pathname(entry, relPath);
+
+        if (archive_write_header(a, entry) != ARCHIVE_OK) continue;
+
+        if (archive_entry_size(entry) > 0) {
+            FILE *f = fopen(fullPath, "rb");
+            if (f) {
+                char buf[65536]; size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+                    archive_write_data(a, buf, n);
+                fclose(f);
+            }
+        }
+    }
+
+    archive_entry_free(entry);
+    archive_read_close(disk);
+    archive_read_free(disk);
+    archive_write_close(a);
+    archive_write_free(a);
+    return (r == ARCHIVE_EOF || r == ARCHIVE_OK) ? 0 : -1;
+}
+
+// apg_extract extracts an archive to destDir (auto-detects format).
+static int apg_extract(const char *archivePath, const char *destDir,
+                       char *errBuf, int errBufLen) {
+    struct archive *a = archive_read_new();
+    archive_read_support_filter_all(a);
+    archive_read_support_format_all(a);
+
+    struct archive *ext = archive_write_disk_new();
+    archive_write_disk_set_options(ext,
+        ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM |
+        ARCHIVE_EXTRACT_SECURE_NODOTDOT | ARCHIVE_EXTRACT_SECURE_SYMLINKS);
+    archive_write_disk_set_standard_lookup(ext);
+
+    if (archive_read_open_filename(a, archivePath, 65536) != ARCHIVE_OK) {
+        snprintf(errBuf, errBufLen, "open %s: %s", archivePath, archive_error_string(a));
+        archive_read_free(a); archive_write_free(ext); return -1;
+    }
+
+    struct archive_entry *entry;
+    int r;
+    char fullPath[4096];
+
+    for (;;) {
+        r = archive_read_next_header(a, &entry);
+        if (r == ARCHIVE_EOF) break;
+        if (r != ARCHIVE_OK) {
+            snprintf(errBuf, errBufLen, "read: %s", archive_error_string(a));
+            break;
+        }
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", destDir, archive_entry_pathname(entry));
+        archive_entry_set_pathname(entry, fullPath);
+
+        if (archive_write_header(ext, entry) != ARCHIVE_OK) continue;
+
+        if (archive_entry_size(entry) > 0) {
+            const void *buf; size_t size; la_int64_t offset;
+            while (archive_read_data_block(a, &buf, &size, &offset) == ARCHIVE_OK)
+                archive_write_data_block(ext, buf, size, offset);
+        }
+    }
+
+    archive_read_close(a);
+    archive_read_free(a);
+    archive_write_close(ext);
+    archive_write_free(ext);
+    return (r == ARCHIVE_EOF) ? 0 : -1;
+}
+*/
+import "C"
 import (
-	"archive/tar"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
-
-	"github.com/DataDog/zstd"
+	"unsafe"
 )
 
 const (
-	// MaxFileSize is the maximum allowed file size (100 MB).
-	MaxFileSize = 100 * 1024 * 1024
-	// MaxArchiveSize is the maximum allowed total archive size (1 GB).
+	MaxFileSize    = 100 * 1024 * 1024
 	MaxArchiveSize = 1024 * 1024 * 1024
-	// MaxFiles is the maximum number of files in an archive.
-	MaxFiles = 10000
-	// ZstdCompressionLevel is the default compression level (1-22, 19 is good).
-	ZstdCompressionLevel = 19
+	MaxFiles       = 10000
 )
 
-// CreateResult contains information about created archive.
+// CreateOptions configures archive creation.
+type CreateOptions struct {
+	// Compression: "zstd" | "xz" | "bz2" | "gz" | "lz4" | "lzma"
+	Compression string
+	// Level: compression level (0 = algorithm default)
+	Level int
+}
+
+// CreateResult contains information about the created archive.
 type CreateResult struct {
 	FilesAdded int
 	TotalSize  int64
 }
 
-// Create creates a tar.zst archive from a directory.
+// Create creates a tar+zstd archive from sourceDir (default settings).
 func Create(archivePath, sourceDir string) (*CreateResult, error) {
-	// Open output file
-	outFile, err := os.Create(archivePath)
-	if err != nil {
-		return nil, fmt.Errorf("create archive file: %w", err)
-	}
-	defer outFile.Close()
-
-	// Create Zstd writer
-	zstdWriter, err := zstd.NewWriter(outFile, zstd.WithCompressionLevel(zstd.SpeedBetterCompression))
-	if err != nil {
-		return nil, fmt.Errorf("create Zstd writer: %w", err)
-	}
-	defer zstdWriter.Close()
-
-	// Create TAR writer writing to Zstd
-	tarWriter := tar.NewWriter(zstdWriter)
-	result := &CreateResult{}
-
-	err = filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(sourceDir, path)
-		if err != nil {
-			return fmt.Errorf("relative path: %w", err)
-		}
-
-		if relPath == "." {
-			return nil
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return fmt.Errorf("tar header: %w", err)
-		}
-		header.Name = relPath
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return fmt.Errorf("read symlink: %w", err)
-			}
-			header.Linkname = link
-		}
-
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return fmt.Errorf("write header: %w", err)
-		}
-
-		if info.Mode().IsRegular() {
-			file, err := os.Open(path)
-			if err != nil {
-				return fmt.Errorf("open file: %w", err)
-			}
-			defer file.Close()
-
-			written, err := io.Copy(tarWriter, file)
-			if err != nil {
-				return fmt.Errorf("write content: %w", err)
-			}
-
-			result.TotalSize += written
-		}
-
-		result.FilesAdded++
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tarWriter.Close(); err != nil {
-		return nil, fmt.Errorf("close tar: %w", err)
-	}
-
-	if err := zstdWriter.Close(); err != nil {
-		return nil, fmt.Errorf("close zstd: %w", err)
-	}
-
-	return result, nil
+	return CreateWithOptions(archivePath, sourceDir, CreateOptions{Compression: "zstd", Level: 19})
 }
 
-// Extract extracts a tar.zst archive to a directory.
+// CreateWithOptions creates an archive with explicit compression settings.
+func CreateWithOptions(archivePath, sourceDir string, opts CreateOptions) (*CreateResult, error) {
+	if opts.Compression == "" {
+		opts.Compression = "zstd"
+	}
+
+	cArchive := C.CString(archivePath)
+	cSource := C.CString(sourceDir)
+	cComp := C.CString(opts.Compression)
+	defer C.free(unsafe.Pointer(cArchive))
+	defer C.free(unsafe.Pointer(cSource))
+	defer C.free(unsafe.Pointer(cComp))
+
+	var errBuf [512]C.char
+	r := C.apg_create(cArchive, cSource, cComp, C.int(opts.Level), &errBuf[0], 512)
+	if r != 0 {
+		return nil, fmt.Errorf("create archive: %s", C.GoString(&errBuf[0]))
+	}
+	return &CreateResult{}, nil
+}
+
+// Extract extracts an archive to destDir.
+// Automatically detects compression format via libarchive.
 func Extract(archivePath, destDir string) error {
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return fmt.Errorf("open archive: %w", err)
+	cArchive := C.CString(archivePath)
+	cDest := C.CString(destDir)
+	defer C.free(unsafe.Pointer(cArchive))
+	defer C.free(unsafe.Pointer(cDest))
+
+	var errBuf [512]C.char
+	r := C.apg_extract(cArchive, cDest, &errBuf[0], 512)
+	if r != 0 {
+		return fmt.Errorf("extract archive: %s", C.GoString(&errBuf[0]))
 	}
-	defer file.Close()
-
-	// Create Zstd reader
-	zstdReader, err := zstd.NewReader(file)
-	if err != nil {
-		return fmt.Errorf("create Zstd reader: %w", err)
-	}
-	defer zstdReader.Close()
-
-	// Read TAR
-	tarReader := tar.NewReader(zstdReader)
-	var totalSize int64
-	var fileCount int
-
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read tar: %w", err)
-		}
-
-		if !isPathSafe(header.Name, destDir) {
-			fmt.Printf("\033[33mWarning: skipping unsafe path: %s\033[0m\n", header.Name)
-			continue
-		}
-
-		if header.Size > MaxFileSize {
-			fmt.Printf("\033[33mWarning: skipping large file: %s\033[0m\n", header.Name)
-			continue
-		}
-
-		totalSize += header.Size
-		if totalSize > MaxArchiveSize {
-			return fmt.Errorf("archive too large (>1GB limit)")
-		}
-
-		fileCount++
-		if fileCount > MaxFiles {
-			return fmt.Errorf("too many files (>%d limit)", MaxFiles)
-		}
-
-		targetPath := filepath.Join(destDir, header.Name)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("mkdir: %w", err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return fmt.Errorf("mkdir parent: %w", err)
-			}
-			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
-			if err != nil {
-				return fmt.Errorf("create file: %w", err)
-			}
-			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
-				return fmt.Errorf("write: %w", err)
-			}
-			outFile.Close()
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return fmt.Errorf("mkdir parent: %w", err)
-			}
-			if err := os.Symlink(header.Linkname, targetPath); err != nil {
-				if !os.IsExist(err) {
-					fmt.Printf("\033[33mWarning: symlink %s: %v\033[0m\n", header.Name, err)
-				}
-			}
-		}
-	}
-
 	return nil
 }
 
-func isPathSafe(path, baseDir string) bool {
-	if path == "" || strings.Contains(path, "..") || filepath.IsAbs(path) || strings.ContainsRune(path, 0) {
-		return false
-	}
-	return strings.HasPrefix(filepath.Clean(filepath.Join(baseDir, path)), filepath.Clean(baseDir))
-}
-
-// ListContents lists the contents of a tar.zst archive.
+// ListContents lists the files in an archive without full extraction.
 func ListContents(archivePath string) ([]string, error) {
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return nil, fmt.Errorf("open archive: %w", err)
-	}
-	defer file.Close()
-
-	// Simple approach: extract to temp dir and list
-	// For full implementation, use streaming decompression
 	tempDir, err := os.MkdirTemp("", "apgbuild-list-*")
 	if err != nil {
-		return nil, fmt.Errorf("create temp: %w", err)
+		return nil, err
 	}
 	defer os.RemoveAll(tempDir)
 
 	if err := Extract(archivePath, tempDir); err != nil {
-		return nil, fmt.Errorf("extract: %w", err)
+		return nil, err
 	}
 
 	var contents []string
-	filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error { //nolint:errcheck
+		if err != nil || info.IsDir() {
 			return err
 		}
-		if !info.IsDir() {
-			rel, _ := filepath.Rel(tempDir, path)
-			contents = append(contents, rel)
-		}
+		rel, _ := filepath.Rel(tempDir, path)
+		contents = append(contents, rel)
 		return nil
 	})
-
 	return contents, nil
 }

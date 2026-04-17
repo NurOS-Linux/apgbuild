@@ -101,6 +101,29 @@ func (b *Builder) CreatePackage(sourceDir, outputPath string) error {
 	return nil
 }
 
+// CreatePackageWithCompression creates an APG package with explicit compression settings.
+func (b *Builder) CreatePackageWithCompression(sourceDir, outputPath, compression string, level int) error {
+	info, err := os.Stat(sourceDir)
+	if err != nil {
+		return fmt.Errorf("source directory does not exist: %s", sourceDir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory: %s", sourceDir)
+	}
+	fmt.Printf("%sCreating archive (%s level=%d)...%s\n", ColorCyan, compression, level, ColorReset)
+	result, err := archive.CreateWithOptions(outputPath, sourceDir, archive.CreateOptions{
+		Compression: compression,
+		Level:       level,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	fmt.Printf("%s Package created: %s (%d files, %d bytes)%s\n",
+		ColorGreen, outputPath, result.FilesAdded, result.TotalSize, ColorReset)
+	return nil
+}
+
+
 // ExtractPackage extracts an APG package to the current directory.
 func (b *Builder) ExtractPackage(packagePath string) error {
 	fmt.Printf("%sExtracting package: %s%s\n", ColorCyan, packagePath, ColorReset)
