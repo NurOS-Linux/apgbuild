@@ -5,7 +5,7 @@
 package archive
 
 /*
-#cgo LDFLAGS: -larchive
+#cgo pkg-config: libarchive
 #cgo CFLAGS: -I/usr/include
 
 #include <archive.h>

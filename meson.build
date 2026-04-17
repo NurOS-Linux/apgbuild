@@ -4,13 +4,23 @@ project('apgbuild',
   meson_version: '>= 0.60.0',
 )
 
-go = find_program('go', required: true)
+go     = find_program('go',      required: true)
+pkgcfg = find_program('pkg-config', required: true)
 
 self_cflags  = '-march=native -O3 -flto=thin -DNDEBUG'
 self_ldflags = '-fuse-ld=mold -flto=thin'
 
-# ── Stage 1: libapg (C library) ───────────────────────────────────────────────
-# libapg must be built and installed before apgbuild CLI can link against it.
+# ── Resolve C library flags via pkg-config ────────────────────────────────────
+# These are passed to CGO so the Go code can link against libarchive and libapg.
+
+# libarchive — required for archive.go CGO
+libarchive_cflags = run_command(pkgcfg, '--cflags', 'libarchive', check: false).stdout().strip()
+libarchive_libs   = run_command(pkgcfg, '--libs',   'libarchive', check: false).stdout().strip()
+if libarchive_libs == ''
+  libarchive_libs = '-larchive'  # fallback if pkg-config not available
+endif
+
+# ── Stage 1: libapg (C library, built via its own meson.build) ───────────────
 
 libapg_build = custom_target('libapg',
   output: 'libapg.stamp',
@@ -20,7 +30,9 @@ libapg_build = custom_target('libapg',
     '''set -e
     cd "@0@/libapg"
     meson setup build --prefix=/usr --buildtype=release \
-      -Dc_args="@1@" -Dc_link_args="@2@" 2>/dev/null || true
+      -Dc_args="@1@" -Dc_link_args="@2@" 2>/dev/null || \
+    meson setup --reconfigure build --prefix=/usr --buildtype=release \
+      -Dc_args="@1@" -Dc_link_args="@2@"
     ninja -C build
     ninja -C build install
     touch "@3@/libapg.stamp"
@@ -33,15 +45,20 @@ libapg_build = custom_target('libapg',
   ],
 )
 
-# ── Stage 2: apgbuild CLI (Go) ────────────────────────────────────────────────
+# ── Stage 2: apgbuild CLI (Go + CGO) ─────────────────────────────────────────
+# CGO_CFLAGS/CGO_LDFLAGS include pkg-config output so #include <archive.h>
+# and -larchive are resolved correctly without hardcoding paths.
+
+cgo_cflags  = self_cflags  + ' ' + libarchive_cflags
+cgo_ldflags = self_ldflags + ' -lapg ' + libarchive_libs
 
 go_env = environment()
-go_env.set('CGO_CFLAGS',  self_cflags)
-go_env.set('CGO_LDFLAGS', self_ldflags + ' -lapg')
+go_env.set('CGO_CFLAGS',  cgo_cflags)
+go_env.set('CGO_LDFLAGS', cgo_ldflags)
 go_env.set('CGO_ENABLED', '1')
 go_env.set('GOFLAGS',     '-mod=mod')
 
-go_ldflags_str = '-s -w -extldflags "' + self_ldflags + ' -lapg"'
+go_ldflags_str = '-s -w -extldflags "' + self_ldflags + ' -lapg ' + libarchive_libs + '"'
 
 go_mod_dir = meson.current_source_dir()
 
@@ -76,8 +93,9 @@ apgbuild_exe = custom_target('apgbuild',
 )
 
 summary({
-  'Binary'  : 'apgbuild',
-  'libapg'  : 'built from submodule',
-  'CFLAGS'  : self_cflags,
-  'LDFLAGS' : self_ldflags,
+  'Binary'          : 'apgbuild',
+  'libapg'          : 'built from submodule',
+  'libarchive flags': libarchive_libs,
+  'CGO_CFLAGS'      : cgo_cflags,
+  'CGO_LDFLAGS'     : cgo_ldflags,
 }, section: 'APGbuild')
