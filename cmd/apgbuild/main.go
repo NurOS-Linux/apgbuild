@@ -56,7 +56,7 @@ Commands:
 // cmdBuild: apgbuild build <dir> -o <out.apg> [--compression zstd] [--level 19]
 func cmdBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	output := fs.String("o", "", "Output .apg file path (required)")
+	output := fs.String("o", "", "Output .apg file path (auto-generated from metadata if omitted)")
 	compression := fs.String("compression", "zstd", "Compression type: zstd|xz|bz2|gz|lz4|lzma")
 	level := fs.Int("level", 0, "Compression level (0 = algorithm default)")
 	if err := fs.Parse(args); err != nil {
@@ -65,11 +65,25 @@ func cmdBuild(args []string) error {
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: apgbuild build <dir> -o <out.apg>")
 	}
-	if *output == "" {
-		return fmt.Errorf("-o output path is required")
+	srcDir := fs.Arg(0)
+
+	outPath := *output
+	if outPath == "" {
+		// Auto-generate from metadata.json: name-version-arch.apg
+		metaPath := srcDir + "/metadata.json"
+		meta, err := metadata.Load(metaPath)
+		if err != nil {
+			return fmt.Errorf("no -o given and failed to read metadata.json: %w", err)
+		}
+		arch := "noarch"
+		if meta.Architecture != nil && *meta.Architecture != "" {
+			arch = *meta.Architecture
+		}
+		outPath = fmt.Sprintf("%s-%s-%s.apg", meta.Name, meta.Version, arch)
 	}
+
 	b := builder.New()
-	return b.CreatePackageWithCompression(fs.Arg(0), *output, *compression, *level)
+	return b.CreatePackageWithCompression(srcDir, outPath, *compression, *level)
 }
 
 // cmdSums: apgbuild sums <dir> <output>
