@@ -1,23 +1,28 @@
 {
-    "name":                   "$name",
-    "version":                "$version",
-    "epoch":                  0,
-    "type":                   "$type",
-    "architecture":           "$architecture",
-    "description":            "$description",
-    "maintainer":             "$maintainer",
-    "license":                "$license",
-    "homepage":               "$homepage",
-    "source_url":             "$source_url",
-    "tags":                   ["$tag1", "$tag2"],
-    "dependencies":           ["$dep1", "$dep2"],
-    "build_dependencies":     ["$build_dep1"],
-    "optional_dependencies":  ["$opt_dep1"],
-    "conflicts":              [],
-    "provides":               ["$provides1"],
-    "replaces":               [],
-    "conf":                   ["/etc/$name/$name.conf"],
-    "installed_size":         0,
-    "build_date":             "$build_date",
-    "checksum":               "$sha256"
+    "name": "$name",
+    "version": "$version",
+    "type": "$type",
+    "architecture": "$architecture",
+    "description": "$description",
+    "maintainer": "$maintainer",
+    "license": "$license",
+    "tags": [
+        "$tag"
+    ],
+    "homepage": "$homepage",
+    "dependencies": [
+        "$dependency"
+    ],
+    "conflicts": [
+        "$conflict"
+    ],
+    "provides": [
+        "$provides"
+    ],
+    "replaces": [
+        "$replaces"
+    ],
+    "conf": [
+        "$conf"
+    ]
 }
