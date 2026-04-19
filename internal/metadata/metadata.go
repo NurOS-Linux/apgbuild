@@ -10,26 +10,34 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/NurOS-Linux/apgbuild/internal/elfanalyzer"
 )
 
 // Metadata represents the APGv2 package metadata structure.
 type Metadata struct {
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	Type         string   `json:"type"`
-	Architecture *string  `json:"architecture"`
-	Description  string   `json:"description"`
-	Maintainer   string   `json:"maintainer"`
-	License      *string  `json:"license"`
-	Tags         []string `json:"tags"`
-	Homepage     string   `json:"homepage"`
-	Dependencies []string `json:"dependencies"`
-	Conflicts    []string `json:"conflicts"`
-	Provides     []string `json:"provides"`
-	Replaces     []string `json:"replaces"`
-	Conf         []string `json:"conf"`
+	Name          string   `json:"name"`
+	Version       string   `json:"version"`
+	Epoch         int      `json:"epoch,omitempty"`
+	Type          string   `json:"type"`
+	Architecture  *string  `json:"architecture"`
+	Description   string   `json:"description"`
+	Maintainer    string   `json:"maintainer"`
+	License       *string  `json:"license"`
+	Homepage      string   `json:"homepage"`
+	SourceURL     string   `json:"source_url,omitempty"`
+	Tags          []string `json:"tags"`
+	Dependencies  []string `json:"dependencies"`
+	BuildDeps     []string `json:"build_dependencies,omitempty"`
+	OptDeps       []string `json:"optional_dependencies,omitempty"`
+	Conflicts     []string `json:"conflicts"`
+	Provides      []string `json:"provides"`
+	Replaces      []string `json:"replaces"`
+	Conf          []string `json:"conf"`
+	InstalledSize int64    `json:"installed_size,omitempty"` // bytes
+	BuildDate     string   `json:"build_date,omitempty"`     // RFC3339
+	Checksum      string   `json:"checksum,omitempty"`       // sha256 of archive
 }
 
 // New creates a new empty Metadata structure with initialized slices.
@@ -37,10 +45,13 @@ func New() *Metadata {
 	return &Metadata{
 		Tags:         make([]string, 0),
 		Dependencies: make([]string, 0),
+		BuildDeps:    make([]string, 0),
+		OptDeps:      make([]string, 0),
 		Conflicts:    make([]string, 0),
 		Provides:     make([]string, 0),
 		Replaces:     make([]string, 0),
 		Conf:         make([]string, 0),
+		BuildDate:    time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -73,6 +84,38 @@ func (m *Metadata) Save(path string) error {
 	return nil
 }
 
+// ComputeInstalledSize walks rootDir and sums file sizes.
+func (m *Metadata) ComputeInstalledSize(rootDir string) error {
+	var total int64
+	err := walkSize(rootDir, &total)
+	if err != nil {
+		return fmt.Errorf("compute installed size: %w", err)
+	}
+	m.InstalledSize = total
+	return nil
+}
+
+func walkSize(dir string, total *int64) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		path := dir + "/" + e.Name()
+		if e.IsDir() {
+			if err := walkSize(path, total); err != nil {
+				return err
+			}
+		} else {
+			info, err := e.Info()
+			if err == nil {
+				*total += info.Size()
+			}
+		}
+	}
+	return nil
+}
+
 // DetectDependenciesFromDir analyzes a directory for ELF binaries and
 // automatically populates the Dependencies field.
 func (m *Metadata) DetectDependenciesFromDir(rootDir string) error {
@@ -81,7 +124,6 @@ func (m *Metadata) DetectDependenciesFromDir(rootDir string) error {
 		return fmt.Errorf("analyze dependencies: %w", err)
 	}
 
-	// Merge with existing dependencies (avoid duplicates)
 	existing := make(map[string]bool)
 	for _, dep := range m.Dependencies {
 		existing[dep] = true
@@ -139,14 +181,10 @@ func (w *Wizard) promptList(text string) []string {
 	return result
 }
 
-func (w *Wizard) promptYesNo(text string) bool {
-	answer := strings.ToLower(w.prompt(text))
-	return answer == "y" || answer == "yes"
-}
-
-func (w *Wizard) promptInt(text string) (int, error) {
+func (w *Wizard) promptInt(text string) int {
 	input := w.prompt(text)
-	return strconv.Atoi(input)
+	v, _ := strconv.Atoi(input)
+	return v
 }
 
 // Run executes the interactive metadata creation wizard.
@@ -165,20 +203,27 @@ func (w *Wizard) Run() (*Metadata, error) {
 		return nil, fmt.Errorf("version is required")
 	}
 
-	meta.Type = w.prompt("Type (misc/binary/source) [misc]: ")
+	epochStr := w.prompt("Epoch [0]: ")
+	if epochStr != "" {
+		meta.Epoch, _ = strconv.Atoi(epochStr)
+	}
+
+	meta.Type = w.prompt("Type (misc/binary/library/source) [misc]: ")
 	if meta.Type == "" {
 		meta.Type = "misc"
 	}
 
 	meta.Architecture = w.promptOptional("Architecture (x86_64/aarch64/all/null) [null]: ")
-
 	meta.Description = w.prompt("Description: ")
 	meta.Maintainer = w.prompt("Maintainer: ")
 	meta.License = w.promptOptional("License (MIT/GPL-3.0/etc): ")
 	meta.Homepage = w.prompt("Homepage URL: ")
+	meta.SourceURL = w.prompt("Source URL (tarball/git): ")
 
 	meta.Tags = w.promptList("Tags (comma-separated): ")
-	meta.Dependencies = w.promptList("Dependencies (comma-separated, e.g., 'lib-example >= 2.0.0'): ")
+	meta.Dependencies = w.promptList("Runtime dependencies (comma-separated): ")
+	meta.BuildDeps = w.promptList("Build dependencies (comma-separated): ")
+	meta.OptDeps = w.promptList("Optional dependencies (comma-separated): ")
 	meta.Conflicts = w.promptList("Conflicts (comma-separated): ")
 	meta.Provides = w.promptList("Provides (comma-separated): ")
 	meta.Replaces = w.promptList("Replaces (comma-separated): ")
