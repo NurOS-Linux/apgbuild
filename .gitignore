@@ -1,0 +1,26 @@
+# Rust / Cargo
+/target
+**/target
+*.rs.bk
+*.pdb
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local build/test artifacts (apgbuild output, keys, packages)
+*.apg
+*.apg.sig
+*.apg.pub
+*.key
+*.log
+
+# Environment / secrets
+.env
+.env.*
+*.pem

@@ -1,0 +1,26 @@
+[package]
+name = "apgbuild"
+version = "0.1.0"
+edition = "2021"
+description = "Converter of Arch Linux PKGBUILD packages into the APGv2 format used by NurOS"
+authors = ["AnmitaliDev <anmitalidev@nuros.org>"]
+license = "GPL-3.0-or-later"
+repository = "https://git.nuros.org/utils/apgbuild"
+
+[[bin]]
+name = "apgbuild"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+dryoc = "0.7.2"
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+shell-words = "1.1.1"
+tar = "0.4.46"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+xz2 = "0.1.7"
+zstd = "0.13.3"
