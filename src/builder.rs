@@ -100,7 +100,11 @@ fn archive_kind(name: &str) -> Option<&'static str> {
 }
 
 fn extract_archive(archive: &Path, srcdir: &Path) -> Result<()> {
-    let name = archive.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = archive
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let status = match archive_kind(&name) {
         Some("tar") => Command::new("tar")
             .arg("xf")
@@ -121,7 +125,10 @@ fn extract_archive(archive: &Path, srcdir: &Path) -> Result<()> {
     if !status.success() {
         return Err(ApgError::BashFailed {
             status: status.to_string(),
-            stderr: format!("failed to extract local source archive {}", archive.display()),
+            stderr: format!(
+                "failed to extract local source archive {}",
+                archive.display()
+            ),
         });
     }
     Ok(())

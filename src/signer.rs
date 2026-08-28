@@ -16,11 +16,8 @@ pub fn write_keypair(
     public_path: &Path,
     secret_path: &Path,
 ) -> Result<()> {
-    let public_hex = hex::encode(keypair.public_key.as_slice());
-    let secret_hex = hex::encode(keypair.secret_key.as_slice());
-
-    fs::write(public_path, format!("{}\n", public_hex)).map_err(|e| error::io(public_path, e))?;
-    fs::write(secret_path, format!("{}\n", secret_hex)).map_err(|e| error::io(secret_path, e))?;
+    fs::write(public_path, keypair.public_key.as_slice()).map_err(|e| error::io(public_path, e))?;
+    fs::write(secret_path, keypair.secret_key.as_slice()).map_err(|e| error::io(secret_path, e))?;
 
     set_owner_only_permissions(secret_path)?;
     Ok(())
@@ -38,21 +35,16 @@ fn set_owner_only_permissions(_path: &Path) -> Result<()> {
 }
 
 pub fn write_public_key(public_key: &PublicKey, path: &Path) -> Result<()> {
-    let encoded = hex::encode(public_key.as_slice());
-    fs::write(path, format!("{}\n", encoded)).map_err(|e| error::io(path, e))
+    fs::write(path, public_key.as_slice()).map_err(|e| error::io(path, e))
 }
 
 pub fn load_secret_key(path: &Path) -> Result<SecretKey> {
-    let hex_str = fs::read_to_string(path).map_err(|e| error::io(path, e))?;
-    let bytes =
-        hex::decode(hex_str.trim()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))?;
+    let bytes = fs::read(path).map_err(|e| error::io(path, e))?;
     SecretKey::try_from(bytes.as_slice()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))
 }
 
 pub fn load_public_key(path: &Path) -> Result<PublicKey> {
-    let hex_str = fs::read_to_string(path).map_err(|e| error::io(path, e))?;
-    let bytes =
-        hex::decode(hex_str.trim()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))?;
+    let bytes = fs::read(path).map_err(|e| error::io(path, e))?;
     PublicKey::try_from(bytes.as_slice()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))
 }
 
@@ -86,13 +78,10 @@ fn feed_file(path: &Path, signer: &mut IncrementalSigner) -> Result<()> {
 }
 
 pub fn write_signature(signature: &Signature, path: &Path) -> Result<()> {
-    let encoded = hex::encode(signature.as_slice());
-    fs::write(path, format!("{}\n", encoded)).map_err(|e| error::io(path, e))
+    fs::write(path, signature.as_slice()).map_err(|e| error::io(path, e))
 }
 
 pub fn read_signature(path: &Path) -> Result<Signature> {
-    let hex_str = fs::read_to_string(path).map_err(|e| error::io(path, e))?;
-    let bytes =
-        hex::decode(hex_str.trim()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))?;
+    let bytes = fs::read(path).map_err(|e| error::io(path, e))?;
     Signature::try_from(bytes.as_slice()).map_err(|_| ApgError::InvalidKey(path.to_path_buf()))
 }

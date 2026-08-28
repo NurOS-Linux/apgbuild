@@ -117,7 +117,7 @@ fn run_build(args: BuildArgs) -> error::Result<()> {
         let sig_path = PathBuf::from(format!("{}.sig", output_path.display()));
         signer::write_signature(&signature, &sig_path)?;
 
-        let pub_path = PathBuf::from(format!("{}.pub", output_path.display()));
+        let pub_path = PathBuf::from(format!("{}.pub.key", output_path.display()));
         signer::write_public_key(&keypair.public_key, &pub_path)?;
 
         println!("apgbuild: wrote {}", sig_path.display());
@@ -132,8 +132,8 @@ fn run_keygen(args: KeygenArgs) -> error::Result<()> {
     let keypair = signer::generate_keypair();
 
     let prefix = args.output_prefix.to_string_lossy().to_string();
-    let public_path = PathBuf::from(format!("{}.pub", prefix));
-    let secret_path = PathBuf::from(format!("{}.key", prefix));
+    let public_path = PathBuf::from(format!("{}.pub.key", prefix));
+    let secret_path = PathBuf::from(format!("{}.secret", prefix));
 
     signer::write_keypair(&keypair, &public_path, &secret_path)?;
 

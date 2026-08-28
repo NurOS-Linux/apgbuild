@@ -47,12 +47,12 @@ Because `package()` always installs into `$pkgdir` (a throwaway directory under 
 apgbuild keygen -o mykey
 ```
 
-Writes `mykey.pub` (hex-encoded 32-byte Ed25519 public key) and `mykey.key` (hex-encoded 64-byte Ed25519 secret key, written with `0600` permissions). Keep `mykey.key` private; `mykey.pub` is meant to be distributed to anyone who needs to verify packages signed with it.
+Writes `mykey.pub.key` (raw 32-byte Ed25519 public key) and `mykey.secret` (raw 64-byte Ed25519 secret key, written with `0600` permissions). Keep `mykey.secret` private; `mykey.pub.key` is meant to be distributed to anyone who needs to verify packages signed with it. Both files hold the exact bytes libsodium's `crypto_sign_keypair` produces, no text encoding of any kind.
 
 ### Verification
 
 ```
-apgbuild verify output.apg --pubkey output.apg.pub
+apgbuild verify output.apg --pubkey output.apg.pub.key
 ```
 
 By default the signature file is expected at `<package>.sig`; override with `--signature`.
@@ -61,9 +61,11 @@ By default the signature file is expected at `<package>.sig`; override with `--s
 
 APGv2 packages carry no embedded checksums or signatures inside the archive itself. Instead, `apgbuild build --sign-key` signs the finished, compressed `.apg` file as a whole with Ed25519 (via `dryoc`, a pure-Rust libsodium-compatible implementation) and writes two files next to it:
 
-- `<output>.apg.sig` - the raw 64-byte detached signature, hex-encoded.
-- `<output>.apg.pub` - the 32-byte Ed25519 public key, hex-encoded, derived from the secret key used to sign.
+- `<output>.apg.sig` - the raw 64-byte detached signature. Not text-encoded.
+- `<output>.apg.pub.key` - the raw 32-byte Ed25519 public key, derived from the secret key used to sign. Not text-encoded; the `.key` suffix lets it be dropped directly into a NurOS trusted keyring directory (or passed to `tulpar key add`) without renaming.
 
-This keeps the package archive itself untouched by the signing step (so rebuilding the archive is deterministic and reproducible independent of key material) and keeps key distribution simple: a repository or a NurOS install medium ships `.pub` files for the keys it trusts, and `apgbuild verify` (or the equivalent check performed by Tulpar's package manager) only needs the `.apg`, the `.sig` and a trusted `.pub` to confirm the archive was produced by the holder of the matching secret key and has not been modified since.
+All key and signature files are exactly the bytes libsodium's `crypto_sign` API reads and writes with `fread`/`fwrite` - deliberately not hex, base64, or PEM - because this format has to interoperate byte-for-byte with `libapg` (`src/sign/sodium/sodium.c`, `src/sign/sodium/keyring.c`) and Tulpar's `key add`/install-time verification, which both do raw binary reads of fixed sizes (`crypto_sign_BYTES` = 64, `crypto_sign_PUBLICKEYBYTES` = 32, `crypto_sign_SECRETKEYBYTES` = 64) with no framing or encoding. `apgbuild`'s signing uses dryoc's incremental signer (`crypto_sign_init`/`update`/`final_create`/`final_verify`), which implements the same Ed25519ph construction as libsodium's incremental API that `libapg` calls, so signatures produced by `apgbuild` verify correctly against the real `libapg`/Tulpar keyring and vice versa - this has been checked directly against `libapg`'s C implementation, not just inferred from matching byte sizes.
 
-To verify a package outside of `apgbuild verify`, any Ed25519 implementation can be used directly: hex-decode the `.pub` and `.sig` files and verify the signature against the raw bytes of the `.apg` file.
+This keeps the package archive itself untouched by the signing step (so rebuilding the archive is deterministic and reproducible independent of key material) and keeps key distribution simple: a repository or a NurOS install medium ships trusted `*.key` files, and `apgbuild verify` (or Tulpar's own install-time `keyring_verify`) only needs the `.apg`, the `.sig`, and a trusted public key to confirm the archive was produced by the holder of the matching secret key and has not been modified since.
+
+To verify a package outside of `apgbuild verify`, any Ed25519 implementation that supports the incremental/prehashed (Ed25519ph) signing mode can be used directly against the raw bytes of the `.pub.key`, `.sig`, and `.apg` files - no decoding step is needed first.
