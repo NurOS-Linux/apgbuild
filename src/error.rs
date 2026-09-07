@@ -22,8 +22,21 @@ pub enum ApgError {
     #[error("unsupported architecture '{0}'")]
     UnsupportedArchitecture(String),
 
+    #[error("unsupported package type '{0}', expected 'binary', 'source' or 'misc'")]
+    UnsupportedPackageType(String),
+
     #[error("package() produced no files in pkgdir, nothing to package")]
     EmptyPkgdir,
+
+    #[error("failed to download source '{0}': {1}")]
+    Download(String, String),
+
+    #[error("checksum mismatch for source '{name}': expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        name: String,
+        expected: String,
+        actual: String,
+    },
 
     #[error("io error at {path}: {source}")]
     Io {
@@ -37,6 +50,9 @@ pub enum ApgError {
 
     #[error("signing error: {0}")]
     Signing(String),
+
+    #[error("{0}")]
+    InvalidArgument(String),
 
     #[error("invalid key file at {0}")]
     InvalidKey(PathBuf),

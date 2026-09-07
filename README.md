@@ -10,9 +10,23 @@ Converts Arch Linux PKGBUILD packages into APGv2 packages for NurOS (Tulpar).
 
 ## What it does
 
-`apgbuild` takes a directory containing a PKGBUILD (and its accompanying install script and local source files), runs the real `prepare()`/`build()`/`package()` shell functions the same way `makepkg` would, and repackages the resulting `$pkgdir` tree as an APGv2 `.apg` archive with a generated `metadata.json`.
+`apgbuild` takes a directory containing an `APGBUILD` or `PKGBUILD` recipe (and its accompanying install script and local source files), runs the real `prepare()`/`build()`/`package()` shell functions the same way `makepkg` would, and repackages the resulting `$pkgdir` tree as an APGv2 `.apg` archive with a generated `metadata.json`.
 
-PKGBUILD variables are read through bash's own `declare -p` serialization rather than a hand-rolled shell grammar, so array/string handling matches what bash itself produces. Install-script hooks (`pre_install`, `post_install`, `pre_remove`, `post_remove` from the file referenced by `install=`) are extracted with `declare -f` and turned into standalone executable scripts under `scripts/`.
+Recipe variables are read through bash's own `declare -p` serialization rather than a hand-rolled shell grammar, so array/string handling matches what bash itself produces. Install hooks (`pre_install`, `post_install`, `pre_remove`, `post_remove`) can be declared directly as functions in the recipe, or in an external `.install` file referenced via `install=`; both are extracted with `declare -f` and turned into standalone executable scripts under `scripts/`.
+
+## APGBUILD: the extended recipe format
+
+`APGBUILD` is a drop-in superset of `PKGBUILD`: same bash syntax, same `build()`/`package()` convention, plus a handful of variables and hooks that are native to NurOS instead of being bolted on through CLI flags or external `.install` files. `apgbuild build <dir>` looks for `APGBUILD` first and falls back to `PKGBUILD` if it isn't present, so existing Arch recipes work unmodified.
+
+Native additions on top of PKGBUILD:
+
+- `pkgtype=binary|source|misc` - equivalent to `--type`; a CLI `--type` still overrides it.
+- `maintainer="Name <email>"` - equivalent to `--maintainer`; falls back to the `# Maintainer:` header comment, then to `"Unknown"`.
+- `tags=('base' 'system')` - equivalent to `--tag`; a non-empty `--tag` list overrides it.
+- `conf=('/etc/foo.conf')` - protected config paths, unioned with Arch's `backup=()` in the final `conf` field (deduplicated, both normalized to start with `/`).
+- `pre_install()`, `post_install()`, `pre_remove()`, `post_remove()` declared directly in the recipe - packaged the same way as an external `.install` file's hooks, and take priority over it if both define the same hook.
+
+`pkgtype=misc` (or a recipe with no `package()` function and no `source=()`, such as a pure metapackage) is exempt from the "package() must produce files" check: an empty `$pkgdir` is valid, and the archive still gets a `data/` directory entry (required by `libapg`'s installer, which refuses to install an archive that lacks one) even when it is empty.
 
 ## Building
 
@@ -31,15 +45,35 @@ apgbuild build ./path/to/pkgbuild-dir -o output.apg --compression zst
 Useful flags:
 
 - `--compression xz|zst` - compression backend for the final archive (default `zst`).
-- `--arch <x86_64|aarch64|riscv64>` - target architecture; defaults to the host architecture. Must be listed in the PKGBUILD's `arch=(...)` array, unless the PKGBUILD declares `arch=('any')`, in which case `architecture` in metadata.json is set to `"all"` regardless of this flag.
-- `--type <binary|source|misc>` - APGv2 package type (default `binary`).
-- `--maintainer "Name <email>"` - overrides the `# Maintainer:` comment auto-detected from the PKGBUILD header.
-- `--tag foo --tag bar` (or `--tag foo,bar`) - tags for metadata.json (PKGBUILD has no native concept of tags).
+- `--arch <x86_64|aarch64|riscv64>` - target architecture; defaults to the host architecture. Must be listed in the recipe's `arch=(...)` array, unless it declares `arch=('any')`, in which case `architecture` in metadata.json is set to `"all"` regardless of this flag.
+- `--type <binary|source|misc>` - APGv2 package type; overrides the recipe's native `pkgtype=`, defaults to `binary` if neither is set.
+- `--maintainer "Name <email>"` - overrides the recipe's native `maintainer=` and the `# Maintainer:` header comment fallback.
+- `--tag foo --tag bar` (or `--tag foo,bar`) - overrides the recipe's native `tags=(...)`.
+- `-o, --output <path>` - exact output file path, or an existing directory to place the auto-named file into.
+- `--output-dir <dir>` - directory to place the auto-named `.apg` file into; created if missing. Takes effect when `--output` isn't given, or when `--output` points at a path that doesn't exist yet as a directory.
+- `-c, --clean` - wipe an existing `src/` before repreparing it, instead of reusing whatever a previous (possibly failed) run left behind.
 - `--sign-key mykey.key` - sign the resulting `.apg` file (see below).
 
-Source files referenced by the PKGBUILD are expected to already be present next to it (no network fetching is performed). If the directory has no `src/` subdirectory yet, apgbuild copies everything except `PKGBUILD` and `*.install` files into a freshly created `src/`, then extracts any recognized local archives found there (`.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, `.tar.bz2`/`.tbz2`, `.tar.zst`, `.tar`, `.zip`) in place, mirroring what makepkg does with downloaded sources, before invoking `prepare()`/`build()`/`package()`.
+### Sources: local files, downloads, and caching
 
-Because `package()` always installs into `$pkgdir` (a throwaway directory under a fresh `tempfile` temporary directory, never the real filesystem), running `apgbuild build` never writes to the host's real `/usr`, `/etc`, and so on, even when the PKGBUILD's `package()` uses `install -Dm... "$pkgdir/usr/bin/..."` verbatim, exactly as makepkg guarantees.
+Every entry in `source=()` is resolved the same way makepkg resolves it, minus VCS sources (`git+`, `svn+`, and similar prefixes are not supported):
+
+- **`name::url`** renames the fetched/copied file to `name`.
+- **`http://`, `https://`, `ftp://` URLs** are downloaded with `ureq` into a shared cache (`$XDG_CACHE_HOME/apg/sources`, or `~/.cache/apg/sources` if that's unset) keyed by filename, then copied into `src/`. A cache hit skips the network entirely, so repeated builds of the same version don't redownload anything.
+- **Everything else** is treated as a local filename and looked up first directly next to the recipe (`startdir/<name>`), then in a sibling `../files/<name>` directory, so patches and configs shared across multiple recipes don't need `local files_dir="${startdir}/../files"` boilerplate.
+- **`sha256sums=()`** is checked index-for-index against `source=()`; `'SKIP'` (or a missing entry) skips verification for that source, anything else must match exactly or the build fails before `prepare()`/`build()`/`package()` ever run.
+
+Recognized local archives (`.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, `.tar.bz2`/`.tbz2`, `.tar.zst`, `.tar`, `.zip`), whether they arrived via `source=()` or were just sitting next to the recipe, are extracted into `src/` in place, mirroring what makepkg does after fetching sources.
+
+`src/` is only prepared once and then reused by later runs (so an interrupted build can be resumed without redownloading); pass `--clean` to force a full re-prepare. `--clean` recursively makes everything writable before removing it, so read-only trees left behind by Go, Cargo, or Git (which mark files, and sometimes whole directories such as Go's module cache, as read-only) don't cause a `Permission denied`.
+
+`prepare()`, `build()`, and `package()` run with `MAKEFLAGS` and `NINJAFLAGS` defaulted to `-j$(nproc)` if the recipe (or the environment `apgbuild` was invoked from) doesn't already set them, so a clean-room build isn't accidentally single-threaded.
+
+Because `package()` always installs into `$pkgdir` (a throwaway directory under a fresh `tempfile` temporary directory, never the real filesystem), running `apgbuild build` never writes to the host's real `/usr`, `/etc`, and so on, even when the recipe's `package()` uses `install -Dm... "$pkgdir/usr/bin/..."` verbatim, exactly as makepkg guarantees.
+
+### Symlinks
+
+`$pkgdir` trees commonly contain symlinks that don't resolve inside the build sandbox: relative ones like `libfoo.so -> libfoo.so.1` are fine once installed but may or may not point at something real inside `$pkgdir` depending on build order, and absolute ones like `python3 -> /usr/bin/python3.11` are never meant to resolve inside `$pkgdir` at all. `apgbuild` archives symlinks as symlinks (`tar`'s `follow_symlinks(false)`) instead of trying to open and read through them, so packages with library symlinks or other absolute/dangling links archive correctly instead of failing with an "No such file or directory" I/O error.
 
 ### Key generation
 

@@ -11,6 +11,7 @@ pub struct MapOptions {
 
 pub fn map_to_metadata(info: &PkgbuildInfo, opts: &MapOptions) -> Result<Metadata> {
     let architecture = map_architecture(&info.arch, &opts.arch)?;
+    let package_type = validate_package_type(&opts.package_type)?;
 
     let license = if info.license.is_empty() {
         None
@@ -18,10 +19,18 @@ pub fn map_to_metadata(info: &PkgbuildInfo, opts: &MapOptions) -> Result<Metadat
         Some(info.license.join(" AND "))
     };
 
+    let mut conf = Vec::new();
+    for path in info.conf.iter().chain(info.backup.iter()) {
+        let normalized = normalize_conf_path(path);
+        if !conf.contains(&normalized) {
+            conf.push(normalized);
+        }
+    }
+
     Ok(Metadata {
         name: info.pkgname.clone(),
         version: info.full_version(),
-        package_type: opts.package_type.clone(),
+        package_type,
         architecture,
         description: info.pkgdesc.clone(),
         maintainer: opts.maintainer.clone(),
@@ -36,8 +45,19 @@ pub fn map_to_metadata(info: &PkgbuildInfo, opts: &MapOptions) -> Result<Metadat
         conflicts: info.conflicts.clone(),
         provides: info.provides.clone(),
         replaces: info.replaces.clone(),
-        conf: info.backup.iter().map(|b| normalize_conf_path(b)).collect(),
+        conf,
     })
+}
+
+fn validate_package_type(package_type: &str) -> Result<String> {
+    match package_type {
+        "binary" | "source" | "misc" => Ok(package_type.to_string()),
+        other => Err(ApgError::UnsupportedPackageType(other.to_string())),
+    }
+}
+
+pub fn allow_empty_pkgdir(info: &PkgbuildInfo, package_type: &str) -> bool {
+    package_type == "misc" || (!info.has_package_func && info.source.is_empty())
 }
 
 fn map_architecture(pkgbuild_arch: &[String], target_arch: &str) -> Result<Option<String>> {

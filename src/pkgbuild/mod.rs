@@ -4,4 +4,4 @@ pub mod parser;
 
 pub use bash::run_bash_script as bash_run;
 pub use model::{InstallHooks, PkgbuildInfo};
-pub use parser::{extract_maintainer_comment, parse_pkgbuild};
+pub use parser::{extract_maintainer_comment, find_recipe, parse_pkgbuild};

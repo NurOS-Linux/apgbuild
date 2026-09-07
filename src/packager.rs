@@ -64,6 +64,7 @@ fn write_tar(inputs: &PackageInputs) -> Result<Vec<u8>> {
     let metadata_json = serde_json::to_vec_pretty(inputs.metadata)?;
     append_file_bytes(&mut builder, "metadata.json", &metadata_json, 0o644)?;
 
+    builder.follow_symlinks(false);
     builder
         .append_dir_all("data", inputs.data_dir)
         .map_err(|e| error::io(inputs.data_dir, e))?;

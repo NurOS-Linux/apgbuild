@@ -14,7 +14,6 @@ use clap::Parser;
 use dryoc::sign::SigningKeyPair;
 
 use cli::{BuildArgs, Cli, Command, KeygenArgs, VerifyArgs};
-use error::ApgError;
 use mapper::MapOptions;
 use packager::{Compression, PackageInputs};
 
@@ -46,18 +45,24 @@ fn run_build(args: BuildArgs) -> error::Result<()> {
         .canonicalize()
         .map_err(|e| error::io(&args.dir, e))?;
 
-    let pkgbuild_path = startdir.join("PKGBUILD");
-    if !pkgbuild_path.is_file() {
-        return Err(ApgError::PkgbuildNotFound(pkgbuild_path));
-    }
+    let recipe_path = pkgbuild::find_recipe(&startdir)?;
+    println!("apgbuild: using recipe {}", recipe_path.display());
 
     let arch = args.arch.unwrap_or_else(default_arch);
 
-    println!("apgbuild: preparing source tree");
-    let srcdir = builder::prepare_srcdir(&startdir)?;
+    println!("apgbuild: reading recipe");
+    let (light_info, _) =
+        pkgbuild::parse_pkgbuild(&startdir, &recipe_path, &startdir, &arch, false)?;
 
-    println!("apgbuild: parsing PKGBUILD");
-    let (info, hooks) = pkgbuild::parse_pkgbuild(&startdir, &srcdir, &arch)?;
+    println!("apgbuild: preparing source tree");
+    let srcdir = builder::prepare_srcdir(&startdir, &light_info, args.clean)?;
+
+    let (info, hooks) = pkgbuild::parse_pkgbuild(&startdir, &recipe_path, &srcdir, &arch, true)?;
+
+    let package_type = args
+        .package_type
+        .or_else(|| info.pkgtype.clone())
+        .unwrap_or_else(|| "binary".to_string());
 
     println!(
         "apgbuild: building {} {} for {}",
@@ -65,38 +70,63 @@ fn run_build(args: BuildArgs) -> error::Result<()> {
         info.full_version(),
         arch
     );
-    let build_output = builder::run_build_and_package(&startdir, &srcdir, &info, &arch)?;
+    let allow_empty = mapper::allow_empty_pkgdir(&info, &package_type);
+    let build_output = builder::run_build_and_package(
+        &startdir,
+        &recipe_path,
+        &srcdir,
+        &info,
+        &arch,
+        allow_empty,
+    )?;
 
-    let maintainer = args.maintainer.unwrap_or_else(|| {
-        pkgbuild::extract_maintainer_comment(&pkgbuild_path)
-            .unwrap_or_else(|| "Unknown".to_string())
-    });
+    let maintainer = args
+        .maintainer
+        .or_else(|| info.maintainer.clone())
+        .or_else(|| pkgbuild::extract_maintainer_comment(&recipe_path))
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let tags = if args.tags.is_empty() {
+        info.tags.clone()
+    } else {
+        args.tags
+    };
 
     let map_options = MapOptions {
         arch,
-        package_type: args.package_type,
+        package_type,
         maintainer,
-        tags: args.tags,
+        tags,
     };
     let metadata = mapper::map_to_metadata(&info, &map_options)?;
 
     let compression = Compression::from_flag(&args.compression).ok_or_else(|| {
-        ApgError::Signing(format!(
+        error::ApgError::InvalidArgument(format!(
             "unsupported compression '{}', expected 'xz' or 'zst'",
             args.compression
         ))
     })?;
 
-    let output_path = args.output.unwrap_or_else(|| {
+    let default_name = {
         let arch_label = metadata
             .architecture
             .clone()
             .unwrap_or_else(|| "all".to_string());
-        PathBuf::from(format!(
-            "{}-{}-{}.apg",
-            metadata.name, metadata.version, arch_label
-        ))
-    });
+        format!("{}-{}-{}.apg", metadata.name, metadata.version, arch_label)
+    };
+
+    let output_path = match (args.output, args.output_dir) {
+        (Some(output), _) if output.is_dir() => output.join(&default_name),
+        (Some(output), _) => output,
+        (None, Some(dir)) => dir.join(&default_name),
+        (None, None) => PathBuf::from(&default_name),
+    };
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| error::io(parent, e))?;
+        }
+    }
 
     println!("apgbuild: packaging {}", output_path.display());
     let package_inputs = PackageInputs {
@@ -156,6 +186,5 @@ fn run_verify(args: VerifyArgs) -> error::Result<()> {
     signer::verify_file(&args.package, &signature, &public_key)?;
 
     println!("apgbuild: signature OK for {}", args.package.display());
-    let _ = fs::metadata(&args.package);
     Ok(())
 }

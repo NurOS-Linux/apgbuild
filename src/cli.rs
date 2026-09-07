@@ -23,14 +23,17 @@ pub struct BuildArgs {
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 
+    #[arg(long = "output-dir")]
+    pub output_dir: Option<PathBuf>,
+
     #[arg(long = "compression", default_value = "zst")]
     pub compression: String,
 
     #[arg(long = "arch")]
     pub arch: Option<String>,
 
-    #[arg(long = "type", default_value = "binary")]
-    pub package_type: String,
+    #[arg(long = "type")]
+    pub package_type: Option<String>,
 
     #[arg(long = "maintainer")]
     pub maintainer: Option<String>,
@@ -40,6 +43,9 @@ pub struct BuildArgs {
 
     #[arg(long = "sign-key")]
     pub sign_key: Option<PathBuf>,
+
+    #[arg(short = 'c', long = "clean")]
+    pub clean: bool,
 }
 
 #[derive(Debug, Parser)]
